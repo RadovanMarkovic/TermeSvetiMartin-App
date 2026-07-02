@@ -90,7 +90,7 @@ export const foods = [
     category: "Quick breakfast",
     categoryHr: "Brzi doručak",
     imageUrl:
-      "https://images.unsplash.com/photo-1517673132405-a56a62b18caf?auto=format&fit=crop&w=900&q=80",
+      "https://upload.wikimedia.org/wikipedia/commons/c/c0/Cornflakes.jpg",
     calories: 180,
     protein: "5 g",
     carbohydrates: "34 g",

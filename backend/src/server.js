@@ -35,25 +35,56 @@ app.get("/api/dashboard", async (req, res) => {
     const totalRows = await all(db, "SELECT COUNT(*) AS total FROM sessions");
     const totalSessions = totalRows[0]?.total || 0;
 
-    const [avatars, foods, activities, rewards, responses] = await Promise.all([
+    const [avatars, foods, mealTypeFoods, activities, rewards, responses] = await Promise.all([
       getBreakdown(db, "avatar", totalSessions),
       getFoodBreakdown(db, totalSessions),
+      getMealTypeFoodBreakdown(db, totalSessions),
       getBreakdown(db, "activity_preference", totalSessions),
       getBreakdown(db, "reward_preference", totalSessions),
       getDetailedSessions(db),
     ]);
 
+    const foodCategories = getArrayBreakdown(
+      responses,
+      "selectedFoodCategories",
+      totalSessions
+    );
+    const activityZones = getArrayBreakdown(
+      responses,
+      "selectedActivityZones",
+      totalSessions
+    );
+    const activityItems = getArrayBreakdown(
+      responses,
+      "selectedActivityItems",
+      totalSessions
+    );
+    const wellnessItems = getArrayBreakdown(
+      responses,
+      "selectedWellnessItems",
+      totalSessions
+    );
+
     res.json({
       totalSessions,
       avatarBreakdown: avatars,
+      foodCategories,
+      breakfastPreferences: mealTypeFoods.breakfast,
+      lunchPreferences: mealTypeFoods.lunch,
+      dinnerPreferences: mealTypeFoods.dinner,
       foodPreferences: foods,
+      activityZones,
+      activityItems,
+      wellnessPreferences: wellnessItems,
       activityPreferences: activities,
       rewardPreferences: rewards,
       recommendations: buildDashboardRecommendations({
         avatars,
         foods,
-        activities,
-        rewards,
+        foodCategories,
+        activities: activityItems.length > 0 ? activityItems : activities,
+        rewards: wellnessItems.length > 0 ? wellnessItems : rewards,
+        activityZones,
       }),
       responses,
     });
@@ -78,6 +109,12 @@ app.post("/api/sessions", async (req, res) => {
     morningPlan,
     afternoonPlan,
     eveningPlan,
+    selectedStations = [],
+    selectedFoodCategories = [],
+    selectedActivityZones = [],
+    selectedActivityItems = [],
+    selectedWellnessItems = [],
+    generatedPerfectDay,
     selectedFoods = [],
     language,
   } = req.body;
@@ -95,6 +132,29 @@ app.post("/api/sessions", async (req, res) => {
       success: false,
       message: "selectedFoods must be an array.",
     });
+  }
+
+  if (!Array.isArray(selectedStations)) {
+    return res.status(400).json({
+      success: false,
+      message: "selectedStations must be an array.",
+    });
+  }
+
+  const arrayFields = {
+    selectedFoodCategories,
+    selectedActivityZones,
+    selectedActivityItems,
+    selectedWellnessItems,
+  };
+
+  for (const [fieldName, fieldValue] of Object.entries(arrayFields)) {
+    if (!Array.isArray(fieldValue)) {
+      return res.status(400).json({
+        success: false,
+        message: `${fieldName} must be an array.`,
+      });
+    }
   }
 
   const sessionId = crypto.randomUUID();
@@ -115,9 +175,15 @@ app.post("/api/sessions", async (req, res) => {
         morning_plan,
         afternoon_plan,
         evening_plan,
+        selected_stations,
+        selected_food_categories,
+        activity_zone,
+        activity_items,
+        wellness_items,
+        generated_perfect_day,
         language
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
       [
         sessionId,
@@ -129,6 +195,12 @@ app.post("/api/sessions", async (req, res) => {
         morningPlan || null,
         afternoonPlan || null,
         eveningPlan || null,
+        JSON.stringify(selectedStations),
+        JSON.stringify(selectedFoodCategories),
+        JSON.stringify(selectedActivityZones),
+        JSON.stringify(selectedActivityItems),
+        JSON.stringify(selectedWellnessItems),
+        generatedPerfectDay || null,
         language || null,
       ]
     );
@@ -235,6 +307,46 @@ async function getFoodBreakdown(db, totalSessions) {
   }));
 }
 
+async function getMealTypeFoodBreakdown(db, totalSessions) {
+  const rows = await all(
+    db,
+    `
+    SELECT meal_type, food_name AS name, COUNT(*) AS count
+    FROM session_foods
+    WHERE food_name IS NOT NULL AND food_name != ''
+      AND meal_type IS NOT NULL AND meal_type != ''
+    GROUP BY meal_type, food_name
+    ORDER BY meal_type ASC, count DESC, name ASC
+  `
+  );
+
+  const groupedRows = {
+    breakfast: [],
+    lunch: [],
+    dinner: [],
+  };
+
+  for (const row of rows) {
+    const mealKey = String(row.meal_type).toLowerCase();
+    const item = {
+      name: row.name,
+      count: row.count,
+      percentage:
+        totalSessions > 0 ? Math.round((row.count / totalSessions) * 100) : 0,
+    };
+
+    if (mealKey.includes("breakfast")) {
+      groupedRows.breakfast.push(item);
+    } else if (mealKey.includes("lunch")) {
+      groupedRows.lunch.push(item);
+    } else if (mealKey.includes("dinner")) {
+      groupedRows.dinner.push(item);
+    }
+  }
+
+  return groupedRows;
+}
+
 async function getDetailedSessions(db) {
   const rows = await all(
     db,
@@ -249,6 +361,12 @@ async function getDetailedSessions(db) {
       s.morning_plan,
       s.afternoon_plan,
       s.evening_plan,
+      s.selected_stations,
+      s.selected_food_categories,
+      s.activity_zone,
+      s.activity_items,
+      s.wellness_items,
+      s.generated_perfect_day,
       s.language,
       s.created_at,
       f.meal_type,
@@ -275,6 +393,12 @@ async function getDetailedSessions(db) {
         morningPlan: row.morning_plan,
         afternoonPlan: row.afternoon_plan,
         eveningPlan: row.evening_plan,
+        selectedStations: parseJsonArray(row.selected_stations),
+        selectedFoodCategories: parseJsonArray(row.selected_food_categories),
+        selectedActivityZones: parseJsonArray(row.activity_zone),
+        selectedActivityItems: parseJsonArray(row.activity_items),
+        selectedWellnessItems: parseJsonArray(row.wellness_items),
+        generatedPerfectDay: row.generated_perfect_day,
         language: row.language,
         createdAt: row.created_at,
         foods: [],
@@ -291,6 +415,38 @@ async function getDetailedSessions(db) {
   }
 
   return [...sessionsById.values()];
+}
+
+function getArrayBreakdown(responses, fieldName, totalSessions) {
+  const counts = new Map();
+
+  for (const response of responses) {
+    for (const value of response[fieldName] || []) {
+      counts.set(value, (counts.get(value) || 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .map(([name, count]) => ({
+      name,
+      count,
+      percentage:
+        totalSessions > 0 ? Math.round((count / totalSessions) * 100) : 0,
+    }))
+    .sort((first, second) => second.count - first.count || first.name.localeCompare(second.name));
+}
+
+function parseJsonArray(value) {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsedValue = JSON.parse(value);
+    return Array.isArray(parsedValue) ? parsedValue : [];
+  } catch (error) {
+    return [];
+  }
 }
 
 function buildDashboardRecommendations({ avatars, foods, activities, rewards }) {
